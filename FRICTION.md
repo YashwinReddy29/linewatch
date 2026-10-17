@@ -6,7 +6,7 @@ noticing friction is the job.
 | When | What happened | What I did |
 | --- | --- | --- |
 | Setup | `pip install` on Ubuntu 24.04 refuses system-wide installs (PEP 668). | Used a venv. Obvious in hindsight; the quickstart could mention it. |
-| Setup | `inference-cli 1.8.0` crashes on import with the latest `supervision 0.31.0`: it still imports `sv.ByteTrack`, which 0.31 removed. A fresh `pip install inference-cli inference-sdk supervision` is broken. | Pinned `supervision<0.30`. Worth an issue or PR (pin the dependency or move the CLI to `trackers`). |
+| Setup | `inference-cli 1.8.0` crashes on import with the latest `supervision 0.31.0`: it still imports `sv.ByteTrack`, which 0.31 removed. A fresh `pip install inference-cli inference-sdk supervision` is broken. | Pinned `supervision<0.30` here, and opened [roboflow/inference#3217](https://github.com/roboflow/inference/pull/3217) to cap supervision in the CLI's own requirements. |
 | SDK | `inference-sdk` warns that the API key is sent in the query string by default. | Opted in with `InferenceConfiguration(api_key_transport="header")`. |
 | Models | The first Universe PPE model I tried (`ppe-bacnb/1`) returned zero detections on an obvious orange vest. | Wrote `eval/compare_models.py` to compare models on my own clips before choosing. |
 | Models | `personal-protective-equipment-combined-model/8` finds vests but never returned a `Person` box on my footage. | Split the job: a COCO person model plus a PPE model, in parallel. |

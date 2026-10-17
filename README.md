@@ -134,3 +134,6 @@ more incidents are reviewed.
   (CC BY 4.0) on Roboflow Universe
 - Footage: see [`samples/LICENSES.md`](samples/LICENSES.md)
 - Typeface: Barlow by Jeremy Tribby (SIL Open Font License), via Fontsource
+
+While building this I hit a fresh-install crash in `inference-cli` and opened a fix upstream:
+[roboflow/inference#3217](https://github.com/roboflow/inference/pull/3217).
