@@ -133,6 +133,25 @@ describe("GET /api/incidents", () => {
     assert.equal(window.incidents.length, 2);
   });
 
+  it("pages through incidents that share a millisecond without skipping any", async () => {
+    // Regression: found by bench/ingest_load.py, which stored 500 of 500 but listed only 400.
+    // The worker sends microsecond timestamps; a millisecond cursor skipped rows at page edges.
+    const bodies = Array.from({ length: 30 }, (_, i) => {
+      const t = `2026-10-02T08:00:00.123${String(100 + i).padStart(3, "0")}Z`;
+      return incidentBody({ startedAt: t, triggeredAt: t });
+    });
+    for (const b of bodies) assert.equal((await ingest(b)).status, 201);
+    const seen = new Set<string>();
+    let cursor = "";
+    for (let page = 0; page < 20; page++) {
+      const body = await (await list(`?limit=7${cursor ? `&cursor=${cursor}` : ""}`)).json();
+      for (const i of body.incidents) seen.add(i.id);
+      if (!body.nextCursor) break;
+      cursor = body.nextCursor;
+    }
+    for (const b of bodies) assert.ok(seen.has(b.id), `incident ${b.id} missing from the pages`);
+  });
+
   it("rejects a forged cursor: 400", async () => {
     assert.equal((await list("?cursor=bm9wZQ")).status, 400);
   });

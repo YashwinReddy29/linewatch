@@ -125,7 +125,9 @@ export async function insertIncident(
     `INSERT INTO incidents
        (id, tracker_id, zone_id, zone_name, rule, started_at, triggered_at, duration_s,
         violating_frames, window_frames, confidence, bbox, has_snapshot, has_raw)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     VALUES ($1,$2,$3,$4,$5,
+             date_trunc('milliseconds', $6::timestamptz), date_trunc('milliseconds', $7::timestamptz),
+             $8,$9,$10,$11,$12,$13,$14)
      ON CONFLICT (id) DO NOTHING
      RETURNING *`,
     [
@@ -160,6 +162,11 @@ export interface ListFilter {
   cursor?: string;
 }
 
+/**
+ * The cursor carries triggeredAt as an ISO string, which has millisecond precision. That is
+ * exact only because times are stored truncated to milliseconds (insertIncident, migration 0003);
+ * with microseconds in the table, rows sharing the boundary's millisecond would be skipped.
+ */
 export function encodeCursor(i: Pick<Incident, "triggeredAt" | "id">): string {
   return Buffer.from(`${i.triggeredAt}|${i.id}`).toString("base64url");
 }
