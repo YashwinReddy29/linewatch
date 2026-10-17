@@ -1,39 +1,29 @@
+import { requireSession } from "@/lib/auth";
 import { publish } from "@/lib/bus";
 import { clearActiveZone, getActiveZone, saveActiveZone } from "@/lib/db";
-import { json, problem } from "@/lib/server";
+import { json, readJson, route } from "@/lib/http";
+import { parse, zoneIn } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+export const GET = route("zones.get", async (req) => {
+  await requireSession(req);
   return json({ zone: await getActiveZone() });
-}
+});
 
-export async function PUT(req: Request) {
-  const body = (await req.json().catch(() => null)) as { name?: unknown; points?: unknown } | null;
-  const name = typeof body?.name === "string" ? body.name.trim() : "";
-  const points = body?.points;
-  if (!name) return problem("Give the zone a name, for example Loading bay 2", 400);
-  if (name.length > 60) return problem("Zone names can be up to 60 characters", 400);
-  const valid =
-    Array.isArray(points) &&
-    points.length >= 3 &&
-    points.length <= 50 &&
-    points.every(
-      (p) =>
-        Array.isArray(p) &&
-        p.length === 2 &&
-        p.every((v) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1),
-    );
-  if (!valid) return problem("A zone needs 3 to 50 points, each between 0 and 1", 400);
-
-  const zone = await saveActiveZone(name, points as [number, number][]);
-  publish({ type: "zone.updated", zone });
+/** PUT /api/zones { name, points: [[x, y], ...] } — replaces the active zone (normalized 0..1). */
+export const PUT = route("zones.save", async (req) => {
+  await requireSession(req);
+  const { name, points } = parse(zoneIn, await readJson(req, 16 * 1024));
+  const zone = await saveActiveZone(name, points);
+  await publish({ type: "zone.updated", zone });
   return json({ zone });
-}
+});
 
-export async function DELETE() {
+export const DELETE = route("zones.clear", async (req) => {
+  await requireSession(req);
   await clearActiveZone();
-  publish({ type: "zone.updated", zone: null });
+  await publish({ type: "zone.updated", zone: null });
   return json({ zone: null });
-}
+});

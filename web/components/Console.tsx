@@ -24,7 +24,7 @@ export function Console() {
       <main className="console">
         <div className="col-video">
           <SetupChecklist status={status} />
-          <StreamView url={status?.streamUrl} worker={status?.worker} />
+          <StreamView url={status ? "/api/stream" : undefined} worker={status?.worker} />
           <StreamStats worker={status?.worker} />
         </div>
         <IncidentFeed

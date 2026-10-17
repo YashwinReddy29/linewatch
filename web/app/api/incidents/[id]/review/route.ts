@@ -1,28 +1,27 @@
+import { requireSession } from "@/lib/auth";
 import { publish } from "@/lib/bus";
 import { setIncidentStatus } from "@/lib/db";
-import { sendToRoboflow } from "@/lib/review";
-import { json, problem } from "@/lib/server";
-import type { IncidentStatus } from "@/lib/types";
+import { json, notFound, readJson, route } from "@/lib/http";
+import { metrics } from "@/lib/metrics";
+import { roboflowConfig } from "@/lib/roboflow";
+import { parse, reviewIn } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const ALLOWED: IncidentStatus[] = ["open", "confirmed", "false_alarm"];
+type Ctx = { params: Promise<{ id: string }> };
 
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const body = (await req.json().catch(() => null)) as { status?: string } | null;
-  const status = body?.status as IncidentStatus | undefined;
-  if (!status || !ALLOWED.includes(status)) {
-    return problem(`status must be one of ${ALLOWED.join(", ")}`, 400);
-  }
-  const incident = await setIncidentStatus(id, status);
-  if (!incident) return problem("Incident not found", 404);
-  publish({ type: "incident.updated", incident });
-
-  // The review is saved first; the Roboflow upload runs after the response so the button is instant.
-  if (status === "false_alarm" && incident.roboflowStatus !== "uploaded") {
-    void sendToRoboflow(id).catch((err) => console.error("Roboflow upload crashed", err));
-  }
+/**
+ * POST /api/incidents/:id/review  { status: "open" | "confirmed" | "false_alarm" }
+ * Marking a false alarm queues the Roboflow upload in the same UPDATE; the upload loop
+ * (lib/jobs.ts) sends it, so the response never waits on Roboflow.
+ */
+export const POST = route<Ctx>("incidents.review", async (req, { params }) => {
+  await requireSession(req);
+  const { status } = parse(reviewIn, await readJson(req, 4096));
+  const incident = await setIncidentStatus((await params).id, status, roboflowConfig().configured);
+  if (!incident) throw notFound("Incident not found");
+  metrics.reviews.inc({ status });
+  await publish({ type: "incident.updated", incident });
   return json({ incident });
-}
+});

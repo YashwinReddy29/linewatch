@@ -7,6 +7,7 @@ import { STATUS_LABEL, exactTime, incidentTitle, percent, relativeTime, seconds 
 import type { Incident } from "@/lib/types";
 
 import { Header } from "./Header";
+import { apiFetch } from "./api";
 import { ReviewActions } from "./ReviewActions";
 import { useLive } from "./useLive";
 
@@ -17,7 +18,7 @@ export function IncidentDetail({ id }: { id: string }) {
   const [view, setView] = useState<"annotated" | "raw">("annotated");
 
   useEffect(() => {
-    fetch(`/api/incidents/${id}`, { cache: "no-store" })
+    apiFetch(`/api/incidents/${id}`, { cache: "no-store" })
       .then(async (res) => {
         if (res.status === 404) return setState("missing");
         if (!res.ok) throw new Error();

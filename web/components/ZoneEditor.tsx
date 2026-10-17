@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Zone } from "@/lib/types";
 
+import { apiFetch, errorMessage } from "./api";
 import { Header } from "./Header";
 import { useLive } from "./useLive";
 
@@ -28,11 +29,11 @@ export function ZoneEditor() {
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const history = useRef<{ points: Pt[]; closed: boolean }[]>([]);
+  const [history, setHistory] = useState<{ points: Pt[]; closed: boolean }[]>([]);
 
   // Start from the zone that is active now, so editing is the default rather than redrawing.
-  useEffect(() => {
-    if (loadedZone || !status) return;
+  // (Adjusting state during render when new data arrives, instead of in an effect.)
+  if (!loadedZone && status) {
     const zone: Zone | null = status.zone;
     if (zone) {
       setPoints(zone.points);
@@ -40,7 +41,7 @@ export function ZoneEditor() {
       setName(zone.name);
     }
     setLoadedZone(true);
-  }, [status, loadedZone]);
+  }
 
   const onFrameLoaded = useCallback((img: HTMLImageElement) => {
     if (img.naturalWidth && img.naturalHeight) setAspect(img.naturalWidth / img.naturalHeight);
@@ -57,17 +58,17 @@ export function ZoneEditor() {
   }, [frameKey, onFrameLoaded]);
 
   const remember = () => {
-    history.current.push({ points, closed });
+    setHistory((h) => [...h, { points, closed }]);
     setDirty(true);
   };
 
   const undo = useCallback(() => {
-    const prev = history.current.pop();
-    if (prev) {
-      setPoints(prev.points);
-      setClosed(prev.closed);
-    }
-  }, []);
+    const prev = history[history.length - 1];
+    if (!prev) return;
+    setHistory(history.slice(0, -1));
+    setPoints(prev.points);
+    setClosed(prev.closed);
+  }, [history]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -118,7 +119,7 @@ export function ZoneEditor() {
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/zones", {
+      const res = await apiFetch("/api/zones", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         // 4 decimals is sub-pixel at 4K; keeps stored zones readable.
@@ -128,7 +129,7 @@ export function ZoneEditor() {
         }),
       });
       const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(errorMessage(body, res.status));
       setDirty(false);
       setMessage({ tone: "ok", text: `Saved ${body.zone.name}. The camera worker switches to it within a few seconds.` });
     } catch (err) {
@@ -140,7 +141,7 @@ export function ZoneEditor() {
 
   async function removeZone() {
     if (!window.confirm("Stop monitoring and remove this zone?")) return;
-    const res = await fetch("/api/zones", { method: "DELETE" });
+    const res = await apiFetch("/api/zones", { method: "DELETE" });
     if (res.ok) {
       setPoints([]);
       setClosed(false);
@@ -250,7 +251,7 @@ export function ZoneEditor() {
             {hint}
           </p>
           <div className="tool-row">
-            <button className="btn btn-quiet" onClick={undo} disabled={history.current.length === 0}>
+            <button className="btn btn-quiet" onClick={undo} disabled={history.length === 0}>
               Undo <kbd>Ctrl Z</kbd>
             </button>
             <button

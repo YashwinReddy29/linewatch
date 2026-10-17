@@ -5,10 +5,12 @@
  *   multipart body: name, split, file
  */
 
+import { env } from "./env";
+
 export function roboflowConfig() {
-  const apiKey = process.env.ROBOFLOW_API_KEY ?? "";
-  const project = process.env.ROBOFLOW_PROJECT ?? "";
-  const workspace = process.env.ROBOFLOW_WORKSPACE ?? "";
+  const apiKey = env.roboflowApiKey();
+  const project = env.roboflowProject();
+  const workspace = env.roboflowWorkspace();
   return { apiKey, project, workspace, configured: Boolean(apiKey && project) };
 }
 
@@ -22,11 +24,18 @@ export interface UploadResult {
   imageId?: string;
   duplicate?: boolean;
   error?: string;
+  /** False when retrying can't help (bad key, unknown project, rejected image). */
+  retryable?: boolean;
+}
+
+/** Network errors, timeouts, 408, 429 and 5xx are worth retrying; other 4xx are not. */
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
 }
 
 export async function uploadFalseAlarm(imageName: string, jpeg: Buffer): Promise<UploadResult> {
   const { apiKey, project, configured } = roboflowConfig();
-  if (!configured) return { ok: false, error: "ROBOFLOW_PROJECT is not set" };
+  if (!configured) return { ok: false, error: "ROBOFLOW_PROJECT is not set", retryable: false };
 
   const params = new URLSearchParams({ api_key: apiKey, batch: "linewatch-false-alarms" });
   params.append("tag", "false-alarm");
@@ -47,10 +56,10 @@ export async function uploadFalseAlarm(imageName: string, jpeg: Buffer): Promise
       const message =
         (body && (body.message || (typeof body.error === "string" ? body.error : JSON.stringify(body.error)))) ||
         `HTTP ${res.status}`;
-      return { ok: false, error: message };
+      return { ok: false, error: message, retryable: !res.ok ? isRetryableStatus(res.status) : true };
     }
     return { ok: true, imageId: body.id, duplicate: Boolean(body.duplicate) };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: err instanceof Error ? err.message : String(err), retryable: true };
   }
 }

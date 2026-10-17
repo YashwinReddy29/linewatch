@@ -16,3 +16,7 @@ eval/testset/
 # env backups
 .env.*
 !.env.example
+
+# Next.js generated
+web/next-env.d.ts
+*.tsbuildinfo

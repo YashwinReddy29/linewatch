@@ -89,7 +89,6 @@ export function ReviewActions({
 
 function RoboflowLine({
   incident,
-  configured,
   projectUrl,
   retrying,
   onRetry,
@@ -101,6 +100,14 @@ function RoboflowLine({
   onRetry: () => void;
 }) {
   switch (incident.roboflowStatus) {
+    case "queued":
+      return (
+        <p className="rf rf-busy">
+          {incident.roboflowAttempts > 0
+            ? `Roboflow upload failed (${incident.roboflowError ?? "error"}); retrying automatically`
+            : "Queued for Roboflow"}
+        </p>
+      );
     case "uploading":
       return <p className="rf rf-busy">Sending the clean frame to Roboflow for relabeling</p>;
     case "uploaded":
@@ -117,7 +124,8 @@ function RoboflowLine({
     case "failed":
       return (
         <p className="rf rf-fail">
-          Not sent to Roboflow: {incident.roboflowError}.{" "}
+          Not sent to Roboflow after {incident.roboflowAttempts} attempt{incident.roboflowAttempts === 1 ? "" : "s"}:{" "}
+          {incident.roboflowError}.{" "}
           <button className="btn-link" onClick={onRetry} disabled={retrying}>
             {retrying ? "Retrying" : "Retry"}
           </button>
@@ -130,6 +138,6 @@ function RoboflowLine({
         </p>
       );
     default:
-      return configured ? <p className="rf rf-busy">Queued for Roboflow</p> : null;
+      return null;
   }
 }

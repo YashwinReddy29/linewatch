@@ -1,37 +1,64 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { Pool, type QueryResultRow } from "pg";
+import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
+import { env } from "./env";
+import { badRequest } from "./http";
+import { log } from "./log";
+import { migrate } from "./migrate";
 import type { Counts, Incident, IncidentStatus, RoboflowStatus, Zone } from "./types";
+import type { IncidentIn } from "./validation";
 
-const globalForDb = globalThis as unknown as { __lwPool?: Pool; __lwSchema?: Promise<void> };
+const g = globalThis as unknown as { __lwPool?: Pool; __lwReady?: Promise<void> };
 
-function pool(): Pool {
-  if (!globalForDb.__lwPool) {
-    const connectionString = process.env.DATABASE_URL;
+export function pool(): Pool {
+  if (!g.__lwPool) {
+    const connectionString = env.databaseUrl();
     if (!connectionString) throw new Error("DATABASE_URL is not set");
-    globalForDb.__lwPool = new Pool({ connectionString, max: 5 });
+    g.__lwPool = new Pool({
+      connectionString,
+      max: Number(process.env.DB_POOL_MAX ?? 10),
+      connectionTimeoutMillis: 5_000,
+      idleTimeoutMillis: 30_000,
+      statement_timeout: 10_000, // no query may hold a connection forever
+    });
+    g.__lwPool.on("error", (err) => log.error({ err }, "idle Postgres client error"));
   }
-  return globalForDb.__lwPool;
+  return g.__lwPool;
 }
 
-function ensureSchema(): Promise<void> {
-  if (!globalForDb.__lwSchema) {
-    const sql = readFileSync(path.join(process.cwd(), "db", "schema.sql"), "utf8");
-    globalForDb.__lwSchema = pool()
-      .query(sql)
-      .then(() => undefined)
+/** Runs pending migrations once per process; every query waits for it. */
+export function ready(): Promise<void> {
+  if (!g.__lwReady) {
+    g.__lwReady = migrate(pool())
+      .then((applied) => {
+        if (applied.length) log.info({ applied }, "migrations applied");
+      })
       .catch((err) => {
-        globalForDb.__lwSchema = undefined; // retry on next request
+        g.__lwReady = undefined; // retry on the next request
         throw err;
       });
   }
-  return globalForDb.__lwSchema;
+  return g.__lwReady;
 }
 
 export async function query<T extends QueryResultRow>(text: string, params: unknown[] = []) {
-  await ensureSchema();
+  await ready();
   return pool().query<T>(text, params);
+}
+
+export async function transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  await ready();
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /* ---------- incidents ---------- */
@@ -56,6 +83,8 @@ interface IncidentRow {
   roboflow_status: RoboflowStatus;
   roboflow_image_id: string | null;
   roboflow_error: string | null;
+  roboflow_attempts: number;
+  roboflow_next_attempt_at: Date | null;
 }
 
 function toIncident(r: IncidentRow): Incident {
@@ -79,34 +108,31 @@ function toIncident(r: IncidentRow): Incident {
     roboflowStatus: r.roboflow_status,
     roboflowImageId: r.roboflow_image_id,
     roboflowError: r.roboflow_error,
+    roboflowAttempts: r.roboflow_attempts,
+    roboflowNextAttemptAt: r.roboflow_next_attempt_at ? r.roboflow_next_attempt_at.toISOString() : null,
   };
 }
 
-export interface NewIncident {
-  trackerId: number;
-  zoneId: string | null;
-  zoneName: string | null;
-  rule: string;
-  startedAt: string;
-  triggeredAt: string;
-  durationS: number;
-  violatingFrames: number;
-  windowFrames: number;
-  confidence: number;
-  bbox: [number, number, number, number];
-}
-
-export async function insertIncident(n: NewIncident): Promise<Incident> {
+/**
+ * Idempotent insert keyed by the worker-generated id. A retried POST (the worker never saw
+ * the first response) hits ON CONFLICT and gets the stored row back with created=false.
+ */
+export async function insertIncident(
+  n: IncidentIn,
+  snapshots: { hasSnapshot: boolean; hasRaw: boolean },
+): Promise<{ incident: Incident; created: boolean }> {
   const { rows } = await query<IncidentRow>(
     `INSERT INTO incidents
-       (tracker_id, zone_id, zone_name, rule, started_at, triggered_at, duration_s,
-        violating_frames, window_frames, confidence, bbox)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       (id, tracker_id, zone_id, zone_name, rule, started_at, triggered_at, duration_s,
+        violating_frames, window_frames, confidence, bbox, has_snapshot, has_raw)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ON CONFLICT (id) DO NOTHING
      RETURNING *`,
     [
+      n.id,
       n.trackerId,
-      n.zoneId,
-      n.zoneName,
+      n.zoneId ?? null,
+      n.zoneName ?? null,
       n.rule,
       n.startedAt,
       n.triggeredAt,
@@ -115,28 +141,60 @@ export async function insertIncident(n: NewIncident): Promise<Incident> {
       n.windowFrames,
       n.confidence,
       JSON.stringify(n.bbox),
+      snapshots.hasSnapshot,
+      snapshots.hasRaw,
     ],
   );
-  return toIncident(rows[0]);
+  if (rows[0]) return { incident: toIncident(rows[0]), created: true };
+  const existing = await getIncident(n.id);
+  if (!existing) throw new Error(`Incident ${n.id} conflicted but could not be read back`);
+  return { incident: existing, created: false };
 }
 
-export async function markSnapshots(id: string, hasSnapshot: boolean, hasRaw: boolean): Promise<Incident> {
+export interface ListFilter {
+  status: IncidentStatus | "all";
+  zoneId?: string;
+  from?: string;
+  to?: string;
+  limit: number;
+  cursor?: string;
+}
+
+export function encodeCursor(i: Pick<Incident, "triggeredAt" | "id">): string {
+  return Buffer.from(`${i.triggeredAt}|${i.id}`).toString("base64url");
+}
+
+function decodeCursor(cursor: string): [string, string] {
+  const [at, id] = Buffer.from(cursor, "base64url").toString("utf8").split("|");
+  if (!at || Number.isNaN(Date.parse(at)) || !isUuid(id ?? "")) throw badRequest("cursor is invalid", "bad_cursor");
+  return [at, id];
+}
+
+/** Keyset pagination, newest first: stable under inserts, unlike OFFSET. */
+export async function listIncidents(f: ListFilter): Promise<{ incidents: Incident[]; nextCursor: string | null }> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const add = (sql: string, value: unknown) => {
+    params.push(value);
+    where.push(sql.replace("?", `$${params.length}`));
+  };
+  if (f.status !== "all") add("status = ?", f.status);
+  if (f.zoneId) add("zone_id = ?", f.zoneId);
+  if (f.from) add("triggered_at >= ?", f.from);
+  if (f.to) add("triggered_at < ?", f.to);
+  if (f.cursor) {
+    const [at, id] = decodeCursor(f.cursor);
+    params.push(at, id);
+    where.push(`(triggered_at, id) < ($${params.length - 1}, $${params.length})`);
+  }
+  params.push(f.limit + 1);
   const { rows } = await query<IncidentRow>(
-    `UPDATE incidents SET has_snapshot = $2, has_raw = $3 WHERE id = $1 RETURNING *`,
-    [id, hasSnapshot, hasRaw],
+    `SELECT * FROM incidents ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY triggered_at DESC, id DESC LIMIT $${params.length}`,
+    params,
   );
-  return toIncident(rows[0]);
-}
-
-export async function listIncidents(status: IncidentStatus | "all", limit = 100): Promise<Incident[]> {
-  const { rows } =
-    status === "all"
-      ? await query<IncidentRow>(`SELECT * FROM incidents ORDER BY triggered_at DESC LIMIT $1`, [limit])
-      : await query<IncidentRow>(
-          `SELECT * FROM incidents WHERE status = $1 ORDER BY triggered_at DESC LIMIT $2`,
-          [status, limit],
-        );
-  return rows.map(toIncident);
+  const page = rows.slice(0, f.limit).map(toIncident);
+  return { incidents: page, nextCursor: rows.length > f.limit ? encodeCursor(page[page.length - 1]) : null };
 }
 
 export async function getIncident(id: string): Promise<Incident | null> {
@@ -145,26 +203,101 @@ export async function getIncident(id: string): Promise<Incident | null> {
   return rows[0] ? toIncident(rows[0]) : null;
 }
 
-export async function setIncidentStatus(id: string, status: IncidentStatus): Promise<Incident | null> {
+/**
+ * Saves a review and moves the upload job with it, in one statement:
+ *  - marked false alarm, never uploaded  -> queued (or skipped when Roboflow isn't configured)
+ *  - un-marked while still queued        -> job cancelled (status back to NULL)
+ *  - already uploaded / uploading / failed -> left alone
+ */
+export async function setIncidentStatus(id: string, status: IncidentStatus, roboflowConfigured: boolean): Promise<Incident | null> {
+  if (!isUuid(id)) return null;
   const { rows } = await query<IncidentRow>(
-    `UPDATE incidents
-       SET status = $2, reviewed_at = CASE WHEN $2 = 'open' THEN NULL ELSE now() END
+    `UPDATE incidents SET
+       status = $2,
+       reviewed_at = CASE WHEN $2 = 'open' THEN NULL ELSE now() END,
+       roboflow_status = CASE
+         WHEN $2 = 'false_alarm' AND (roboflow_status IS NULL OR roboflow_status = 'skipped')
+           THEN CASE WHEN $3 THEN 'queued' ELSE 'skipped' END
+         WHEN $2 <> 'false_alarm' AND roboflow_status IN ('queued', 'skipped') THEN NULL
+         ELSE roboflow_status END,
+       roboflow_attempts = CASE
+         WHEN $2 = 'false_alarm' AND (roboflow_status IS NULL OR roboflow_status = 'skipped') THEN 0
+         ELSE roboflow_attempts END,
+       roboflow_next_attempt_at = CASE
+         WHEN $2 = 'false_alarm' AND (roboflow_status IS NULL OR roboflow_status = 'skipped') AND $3 THEN now()
+         WHEN $2 <> 'false_alarm' AND roboflow_status = 'queued' THEN NULL
+         ELSE roboflow_next_attempt_at END,
+       roboflow_error = CASE
+         WHEN $2 = 'false_alarm' AND (roboflow_status IS NULL OR roboflow_status = 'skipped') AND NOT $3
+           THEN 'Set ROBOFLOW_API_KEY and ROBOFLOW_PROJECT to send false alarms'
+         WHEN $2 = 'false_alarm' AND (roboflow_status IS NULL OR roboflow_status = 'skipped') THEN NULL
+         ELSE roboflow_error END
      WHERE id = $1 RETURNING *`,
-    [id, status],
+    [id, status, roboflowConfigured],
   );
   return rows[0] ? toIncident(rows[0]) : null;
 }
 
-export async function setRoboflowState(
-  id: string,
-  state: RoboflowStatus,
-  imageId: string | null = null,
-  error: string | null = null,
-): Promise<Incident | null> {
+/** Manual retry of a failed (or skipped) upload: back to the queue with a fresh attempt budget. */
+export async function requeueUpload(id: string): Promise<Incident | null> {
+  if (!isUuid(id)) return null;
   const { rows } = await query<IncidentRow>(
-    `UPDATE incidents SET roboflow_status = $2, roboflow_image_id = $3, roboflow_error = $4
-     WHERE id = $1 RETURNING *`,
-    [id, state, imageId, error],
+    `UPDATE incidents SET roboflow_status = 'queued', roboflow_attempts = 0,
+       roboflow_next_attempt_at = now(), roboflow_error = NULL
+     WHERE id = $1 AND status = 'false_alarm' AND roboflow_status IN ('failed', 'skipped')
+     RETURNING *`,
+    [id],
+  );
+  return rows[0] ? toIncident(rows[0]) : null;
+}
+
+/* ---------- upload jobs ---------- */
+
+/**
+ * Claims one due upload. `uploading` rows whose lease expired belong to a process that died
+ * mid-upload, so they are claimed again. SKIP LOCKED lets several processes poll safely.
+ */
+export async function claimUpload(leaseSeconds: number): Promise<Incident | null> {
+  const { rows } = await query<IncidentRow>(
+    `UPDATE incidents SET roboflow_status = 'uploading',
+       roboflow_attempts = roboflow_attempts + 1,
+       roboflow_locked_until = now() + make_interval(secs => $1::float8)
+     WHERE id = (
+       SELECT id FROM incidents
+       WHERE status = 'false_alarm'
+         AND ((roboflow_status = 'queued' AND roboflow_next_attempt_at <= now())
+           OR (roboflow_status = 'uploading' AND roboflow_locked_until < now()))
+       ORDER BY roboflow_next_attempt_at NULLS FIRST
+       LIMIT 1
+       FOR UPDATE SKIP LOCKED)
+     RETURNING *`,
+    [leaseSeconds],
+  );
+  return rows[0] ? toIncident(rows[0]) : null;
+}
+
+export async function completeUpload(id: string, imageId: string | null): Promise<Incident | null> {
+  const { rows } = await query<IncidentRow>(
+    `UPDATE incidents SET roboflow_status = 'uploaded', roboflow_image_id = $2, roboflow_error = NULL,
+       roboflow_locked_until = NULL, roboflow_next_attempt_at = NULL
+     WHERE id = $1 AND roboflow_status = 'uploading' RETURNING *`,
+    [id, imageId],
+  );
+  return rows[0] ? toIncident(rows[0]) : null;
+}
+
+/** Retryable failure with attempts left -> queued again after `retryInMs`; otherwise failed for good. */
+export async function failUpload(id: string, error: string, retryInMs: number | null): Promise<Incident | null> {
+  const { rows } = await query<IncidentRow>(
+    `UPDATE incidents SET
+       -- Un-marked as a false alarm while uploading: drop the job instead of retrying it.
+       roboflow_status = CASE WHEN status <> 'false_alarm' THEN NULL
+                              WHEN $3::float8 IS NULL THEN 'failed' ELSE 'queued' END,
+       roboflow_next_attempt_at = CASE WHEN $3::float8 IS NULL THEN NULL
+                                       ELSE now() + make_interval(secs => $3::float8 / 1000) END,
+       roboflow_error = $2, roboflow_locked_until = NULL
+     WHERE id = $1 AND roboflow_status = 'uploading' RETURNING *`,
+    [id, error.slice(0, 500), retryInMs],
   );
   return rows[0] ? toIncident(rows[0]) : null;
 }
@@ -202,23 +335,14 @@ export async function getActiveZone(): Promise<Zone | null> {
 
 /** Saves a new zone and makes it the only active one, in one transaction. */
 export async function saveActiveZone(name: string, points: [number, number][]): Promise<Zone> {
-  await ensureSchema();
-  const client = await pool().connect();
-  try {
-    await client.query("BEGIN");
+  return transaction(async (client) => {
     await client.query(`UPDATE zones SET active = FALSE WHERE active`);
     const { rows } = await client.query<ZoneRow>(
       `INSERT INTO zones (name, points, active) VALUES ($1, $2, TRUE) RETURNING *`,
       [name, JSON.stringify(points)],
     );
-    await client.query("COMMIT");
     return toZone(rows[0]);
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function clearActiveZone(): Promise<void> {
