@@ -14,3 +14,5 @@ noticing friction is the job.
 | Rules | Vest detections flicker, so a worker in a vest got flagged and the same people re-fired. | Majority window per tracked person, lower vest threshold than person threshold, 60 s cooldown per person. |
 | Docs | The single-image upload REST endpoint wasn't on the docs pages I found. | Read the `roboflow-python` source (`adapters/rfapi.py`) and mirrored its request. |
 | Web | The zone editor's frame image could load before React hydrated, so `onLoad` never fired and the editor waited forever. | Check `img.complete` on mount. Caught by an end-to-end browser test. |
+| Eval | My first precision run said 100 of 100 incidents were real. The clips are about 6 s long and loop, so the same few people were flagged on every loop, and the API capped the list at 100. | Added `FRAME_STRIDE` for one repeatable pass per clip, removed the cap, reset and re-reviewed: 19 of 22. |
+| Tracking | On the high-camera clip ByteTrack handed out 128 IDs in 175 frames, and each new ID raised a fresh incident for the same worker (49 incidents). | A track that fires near a live incident joins it: 49 to 20 on the same frames. |

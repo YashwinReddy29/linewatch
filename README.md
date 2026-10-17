@@ -61,7 +61,7 @@ Optional: set `ROBOFLOW_WORKSPACE` and `ROBOFLOW_PROJECT` to collect false alarm
 
 **Running parts locally** (for development): `make worker` runs the worker against an Inference
 server you started with `inference server start`; `make web` runs the console in dev mode against
-the Postgres from compose (port 5433). `make test` and `make lint` run the checks CI runs.
+the Postgres from compose (port 5433 by default, `DB_PORT`). `make test` and `make lint` run the checks CI runs.
 
 ## Results
 
@@ -92,17 +92,50 @@ So the worker uses RF-DETR small for people and `construction-site-safety/27` fo
 | Full loop (decode, infer, track, draw) | p50 811 ms, p95 1086 ms |
 | People detected per frame | 7.6 on average; at least one in every frame |
 
-**Incidents.** 6 incidents in that run; of the 3 reviewed in the console so far, 3 were real
-(`make precision`). That sample is too small to call a precision rate; it will be updated as
-more incidents are reviewed.
+**Incidents.** One pass over each clip (`LOOP_VIDEO=false FRAME_STRIDE=5`: every 5th frame,
+once, so a rerun sees the same frames). I drew a zone over each clip's work area and reviewed
+every incident by its snapshot: confirmed only for a real person, in the zone, clearly without a
+vest; false alarm for anything else, including "can't tell".
 
-**Not measured yet:** detection precision, recall and mAP@50 on a labeled test set
-(`make eval`). Those need a hand-labeled set of frames that weren't used for tuning.
+| Clip | Frames | Incidents | Real | False alarms |
+| --- | --- | --- | --- | --- |
+| street-crew (workers with and without vests) | 28 | 1 | 1 | 0 |
+| two-people (one vest, one without) | 45 | 1 | 1 | 0 |
+| vests-walking (everyone in a vest, control) | 32 | 0 | – | 0 |
+| site1 (high camera, ~9 small people per frame) | 175 | 20 | 17 | 3 |
+| **Total** | 280 | **22** | **19** | **3** |
+
+To reproduce one clip (draw its zone first, then review in the console and run `make precision`):
+
+```bash
+docker compose stop worker
+docker compose run --rm --service-ports --name worker \
+  -e LOOP_VIDEO=false -e FRAME_STRIDE=5 -e VIDEO_SOURCE=samples/site1.mp4 worker
+```
+
+19 of 22 incidents were real. The 3 false alarms were all on site1, where the person model boxed
+objects the size of a distant person. In the site1 run before merging (below), no confidence
+threshold separated those from real people: false alarms 0.45 to 0.86, real 0.38 to 0.89. 22 incidents on stock footage is a small sample,
+not a precision claim.
+
+**Re-identified people.** On site1 the tracker lost small, distant people and re-found them under
+new IDs: 128 track IDs in 175 frames. Before merging, each new ID raised its own incident:
+49 incidents (42 showed a real person without a vest, 7 were false alarms). 29 of them fired
+within one person-height of an incident whose person had just been seen, which points to the
+same workers again. Merging those into the live incident cut it to the 20 above, on the same
+frames.
+
+**Not measured yet:** recall (how many people without a vest the system missed) needs a
+hand count per clip; detection precision, recall and mAP@50 need a labeled test set
+(`make eval`) of frames that weren't used for tuning.
 
 ## Design decisions
 
 - **One incident per person, not per frame.** A sliding majority window per tracked person, plus
   a cooldown. Vest detections flicker; without this, one worker produced repeat alerts.
+- **A re-identified person joins their live incident.** Trackers lose small people and re-find
+  them under new IDs. A track that fires within one person-height of an incident whose person was
+  seen in the last 15 s joins it. On site1 this took 49 incidents to 20.
 - **Benefit of the doubt for vests.** A vest counts at confidence 0.25, a person at 0.35. Proving a
   vest is present should be easier than proving it is missing.
 - **Feet decide "in the zone".** The bottom-center of a person's box, so someone leaning over the
@@ -118,6 +151,9 @@ more incidents are reviewed.
 - One camera, one zone at a time.
 - Stock footage, not a real site; sample clips are short and looped.
 - On high, distant camera angles people are small and recall drops. See `FRICTION.md`.
+- On those angles the person model also boxes person-sized objects, which can never "wear" a vest:
+  all 3 false alarms in the evaluation were this.
+- Two workers without vests standing shoulder to shoulder can be merged into one incident.
 
 ## What I'd build next
 
