@@ -1,0 +1,6 @@
+inference-sdk==1.8.0
+# Pinned below 0.30: inference-cli 1.8.0 imports sv.ByteTrack, removed in 0.31.
+supervision==0.29.1
+numpy>=2.0,<2.4
+requests>=2.31
+python-dotenv>=1.0

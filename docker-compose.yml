@@ -1,0 +1,79 @@
+# One command: docker compose up --build
+# Then open http://localhost:3000 (console) and draw a zone.
+#
+# Services
+#   inference  Roboflow Inference server (CPU). Runs the models locally; no credits used.
+#   worker     Python: reads video, calls inference, tracks people, fires incidents, serves the live stream.
+#   web        Next.js console + API: live view, incident review, zone editor, Roboflow upload.
+#   db         Postgres: incidents, zones, reviews.
+
+services:
+  inference:
+    image: roboflow/roboflow-inference-server-cpu:latest
+    restart: unless-stopped
+    volumes:
+      - inference-cache:/tmp/cache # model weights survive restarts
+    # Not published on the host on purpose: only the worker talks to it, and this avoids
+    # clashing with an Inference server you may already run with `inference server start`.
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: linewatch
+      POSTGRES_PASSWORD: linewatch
+      POSTGRES_DB: linewatch
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${DB_PORT:-5433}:5432" # for running the web app outside Docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U linewatch -d linewatch"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://linewatch:linewatch@db:5432/linewatch
+      WORKER_URL: http://worker:8090
+      STREAM_PUBLIC_URL: http://localhost:${STREAM_PORT:-8090}
+      WORKER_TOKEN: ${WORKER_TOKEN:?Set WORKER_TOKEN in .env}
+      ROBOFLOW_API_KEY: ${ROBOFLOW_API_KEY:-}
+      ROBOFLOW_WORKSPACE: ${ROBOFLOW_WORKSPACE:-}
+      ROBOFLOW_PROJECT: ${ROBOFLOW_PROJECT:-}
+      SITE_NAME: ${SITE_NAME:-Demo site}
+    volumes:
+      - web-data:/data # incident snapshots
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+
+  worker:
+    build: ./worker
+    restart: unless-stopped
+    depends_on:
+      - inference
+      - web
+    env_file: .env
+    environment:
+      # These override .env so the same .env works for local runs and for compose.
+      INFERENCE_URL: http://inference:9001
+      WEB_URL: http://web:3000
+      ZONE_FILE: /app/zone.json
+      OUT_DIR: /app/out
+      STREAM_PORT: 8090
+    volumes:
+      - ./samples:/app/samples:ro
+      - ./out:/app/out
+    ports:
+      - "127.0.0.1:${STREAM_PORT:-8090}:8090"
+
+volumes:
+  inference-cache:
+  db-data:
+  web-data:
