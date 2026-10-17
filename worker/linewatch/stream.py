@@ -1,8 +1,13 @@
 """Tiny HTTP server for the browser.
 
-GET /stream.mjpg  annotated live view (MJPEG, works in a plain <img> tag)
+GET /stream.mjpg  annotated live view (MJPEG; the web app proxies it behind its login)
 GET /frame.jpg    latest raw frame (the zone editor draws on this)
-GET /health       JSON status for the web app's setup check
+GET /health       liveness + JSON status for the console (always 200 while the process runs)
+GET /ready        200 only while frames are being processed, else 503
+GET /metrics      Prometheus metrics
+
+Only the web app and a metrics scraper are meant to reach this port: it is not published
+by docker-compose.yml.
 """
 
 from __future__ import annotations
@@ -14,6 +19,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
 import numpy as np
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+from .metrics import REGISTRY
 
 
 class FrameHub:
@@ -47,19 +55,26 @@ def _handler_for(hub: FrameHub):
         def log_message(self, *args) -> None:  # keep the console readable
             pass
 
-        def _cors(self) -> None:
-            self.send_header("Access-Control-Allow-Origin", "*")
+        def _cors(self) -> None:  # no CORS: browsers reach the stream through the web app only
             self.send_header("Cache-Control", "no-store")
+
+        def _send(self, status: int, content_type: str, body: bytes) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self._cors()
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_GET(self) -> None:
             path = self.path.split("?")[0]
             if path == "/health":
-                body = json.dumps(hub.status).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self._cors()
-                self.end_headers()
-                self.wfile.write(body)
+                self._send(200, "application/json", json.dumps(hub.status).encode())
+            elif path == "/ready":
+                running = hub.status.get("state") == "running"
+                self._send(200 if running else 503, "application/json", json.dumps(hub.status).encode())
+            elif path == "/metrics":
+                self._send(200, CONTENT_TYPE_LATEST, generate_latest(REGISTRY))
             elif path == "/frame.jpg":
                 _, jpg = hub.latest(raw=True)
                 if jpg is None:

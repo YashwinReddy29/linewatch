@@ -7,6 +7,7 @@ Run from the repo root:
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import signal
 import sys
@@ -18,6 +19,7 @@ from pathlib import Path
 import requests
 import supervision as sv
 
+from . import metrics
 from .config import Config
 from .detector import Detector
 from .geometry import denormalize
@@ -32,8 +34,32 @@ from .zones import ZoneProvider
 # but inference-cli 1.8.0 still requires supervision<0.30, so we pin and silence it.
 warnings.filterwarnings("ignore", message=".*ByteTrack.*", category=FutureWarning)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("linewatch")
+
+
+class JsonFormatter(logging.Formatter):
+    """One JSON object per line, matching the web app's log shape."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "time": datetime.fromtimestamp(record.created).astimezone().isoformat(timespec="milliseconds"),
+            "level": record.levelname.lower(),
+            "service": "worker",
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            entry["err"] = self.formatException(record.exc_info)
+        return json.dumps(entry)
+
+
+def setup_logging(fmt: str) -> None:
+    handler = logging.StreamHandler()
+    if fmt == "json":
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 
 
 def wait_for_inference_server(config: Config, hub: FrameHub) -> None:
@@ -89,6 +115,7 @@ class LatencyLog:
 
 def run() -> int:
     config = Config()
+    setup_logging(config.log_format)
     problems = config.validate()
     if problems:
         for p in problems:
@@ -161,6 +188,7 @@ def run() -> int:
     signal.signal(signal.SIGTERM, _stop)
 
     frame_no = 0
+    merged_seen = 0
     fps_ema = 0.0
     incidents_total = 0
     try:
@@ -184,8 +212,14 @@ def run() -> int:
             active = {s.tracker_id for s in statuses if rules.is_active(s.tracker_id)}
 
             loop_ms = (time.perf_counter() - loop_start) * 1000
+            metrics.FRAMES.inc()
+            metrics.LOOP_SECONDS.observe(loop_ms / 1000)
+            metrics.INFER_SECONDS.labels(model=config.person_model_id).observe(dets.person_ms / 1000)
+            if not detector.single_model:
+                metrics.INFER_SECONDS.labels(model=config.ppe_model_id).observe(dets.ppe_ms / 1000)
             fps_ema = (1000 / loop_ms) if fps_ema == 0 else 0.9 * fps_ema + 0.1 * (1000 / loop_ms)
             in_zone = sum(1 for s in statuses if s.in_zone)
+            metrics.PEOPLE_IN_ZONE.set(in_zone)
             hud = (
                 f"{fps_ema:4.1f} FPS  |  inference {dets.infer_ms:5.0f} ms  |  "
                 f"in zone {in_zone}  |  incidents {incidents_total + len(new_incidents)}"
@@ -195,8 +229,17 @@ def run() -> int:
 
             for inc in new_incidents:
                 incidents_total += 1
-                log.info("Incident: track %s without vest in %s", inc.tracker_id, zone.name if zone else "?")
-                sink.submit(inc, zone, annotated, frame)
+                metrics.INCIDENTS.inc()
+                incident_id = sink.submit(inc, zone, annotated, frame)
+                log.info(
+                    "Incident %s: track %s without vest in %s",
+                    incident_id,
+                    inc.tracker_id,
+                    zone.name if zone else "?",
+                )
+            if rules.suppressed > merged_seen:
+                metrics.MERGED.inc(rules.suppressed - merged_seen)
+                merged_seen = rules.suppressed
 
             hub.set_status(
                 "running",
@@ -226,6 +269,8 @@ def run() -> int:
             incidents_total,
             rules.suppressed,
         )
+        hub.set_status("stopping", "Worker is shutting down")
+        sink.close(config.drain_seconds)
         latency.close()
         detector.close()
         source.release()
