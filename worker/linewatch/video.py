@@ -15,9 +15,12 @@ import numpy as np
 
 
 class VideoSource:
-    def __init__(self, source: str, loop: bool = True, max_width: int = 1280) -> None:
+    def __init__(self, source: str, loop: bool = True, max_width: int = 1280, stride: int = 0) -> None:
         self.source = source
         self.loop = loop
+        # stride > 0: read every stride-th frame of a file, ignoring the wall clock. Every run of the
+        # same clip then sees the same frames, which is what an evaluation pass needs.
+        self.stride = stride
         self.max_width = max_width
         self.is_file = not (source.isdigit() or "://" in source)
         self._cap: cv2.VideoCapture | None = None
@@ -42,7 +45,12 @@ class VideoSource:
 
     def read(self) -> np.ndarray | None:
         assert self._cap is not None
-        if self.is_file:
+        if self.is_file and self.stride > 0:
+            for _ in range(self.stride - 1 if self._index else 0):
+                if not self._cap.grab():
+                    return self._restart_or_end()
+                self._index += 1
+        elif self.is_file:
             target = int((time.monotonic() - self._started) * self.fps)
             while self._index < target:
                 if not self._cap.grab():

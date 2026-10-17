@@ -51,6 +51,8 @@ class Config:
     )
     loop_video: bool = field(default_factory=lambda: os.environ.get("LOOP_VIDEO", "true").lower() == "true")
     max_width: int = field(default_factory=lambda: _int("MAX_WIDTH", 1280))
+    # 0 = play files in real time like a camera; N = process every Nth frame (repeatable eval passes)
+    frame_stride: int = field(default_factory=lambda: _int("FRAME_STRIDE", 0))
 
     # Incident rule (majority filter over a sliding window, per tracked person)
     window_frames: int = field(default_factory=lambda: _int("WINDOW_FRAMES", 6))

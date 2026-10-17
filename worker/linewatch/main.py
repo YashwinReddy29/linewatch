@@ -56,7 +56,12 @@ def wait_for_inference_server(config: Config, hub: FrameHub) -> None:
 def open_source(config: Config, hub: FrameHub) -> VideoSource:
     while True:
         try:
-            return VideoSource(config.video_source, loop=config.loop_video, max_width=config.max_width)
+            return VideoSource(
+                config.video_source,
+                loop=config.loop_video,
+                max_width=config.max_width,
+                stride=config.frame_stride,
+            )
         except RuntimeError as exc:
             hub.set_status("error", f"{exc}. Check VIDEO_SOURCE in .env.")
             log.error("%s; retrying in 5s", exc)
