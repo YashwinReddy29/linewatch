@@ -143,6 +143,8 @@ def run() -> int:
         min_violating=config.min_violating_frames,
         stale_seconds=config.stale_track_seconds,
         cooldown_seconds=config.incident_cooldown_seconds,
+        dedupe_radius=config.dedupe_radius,
+        dedupe_seconds=config.dedupe_seconds,
     )
     zones = ZoneProvider(config.web_url, config.zone_file, config.zone_poll_seconds, config.worker_token)
     sink = IncidentSink(config.web_url, config.out_dir, config.worker_token)
@@ -218,7 +220,12 @@ def run() -> int:
             )
             frame_no += 1
     finally:
-        log.info("Stopping after %s frames, %s incidents", frame_no, incidents_total)
+        log.info(
+            "Stopping after %s frames, %s incidents (%s merged as re-identified people)",
+            frame_no,
+            incidents_total,
+            rules.suppressed,
+        )
         latency.close()
         detector.close()
         source.release()

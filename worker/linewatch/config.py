@@ -61,6 +61,10 @@ class Config:
     incident_cooldown_seconds: float = field(
         default_factory=lambda: _float("INCIDENT_COOLDOWN_SECONDS", 60.0)
     )
+    # A new track that fires within DEDUPE_RADIUS person-heights of a live incident (person seen in
+    # the last DEDUPE_SECONDS) joins it instead of raising a new one. 0 turns it off.
+    dedupe_radius: float = field(default_factory=lambda: _float("DEDUPE_RADIUS", 1.0))
+    dedupe_seconds: float = field(default_factory=lambda: _float("DEDUPE_SECONDS", 15.0))
 
     # ByteTrack tuning. New tracks need confidence > activation + 0.1, so keep this low when
     # the detector is unsure about small, distant people.
