@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { BusEvent, Incident, StatusResponse, Zone } from "@/lib/types";
 
+import { apiFetch, errorMessage } from "./api";
+
 export type Connection = "connecting" | "live" | "reconnecting";
 
 /**
@@ -20,8 +22,8 @@ export function useLive() {
 
   const loadStatus = useCallback(async () => {
     try {
-      const res = await fetch("/api/status", { cache: "no-store" });
-      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `HTTP ${res.status}`);
+      const res = await apiFetch("/api/status", { cache: "no-store" });
+      if (!res.ok) throw new Error(errorMessage(await res.json().catch(() => null), res.status));
       const body = (await res.json()) as StatusResponse;
       if (mounted.current) {
         setStatus(body);
@@ -34,7 +36,8 @@ export function useLive() {
 
   const loadIncidents = useCallback(async () => {
     try {
-      const res = await fetch("/api/incidents?status=all", { cache: "no-store" });
+      // Newest 200; older incidents stay reachable through the paginated API.
+      const res = await apiFetch("/api/incidents?status=all&limit=200", { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as { incidents: Incident[] };
       if (mounted.current) setIncidents(body.incidents);
@@ -56,6 +59,9 @@ export function useLive() {
 
   useEffect(() => {
     mounted.current = true;
+    // Both loaders set state only after their fetch resolves (asynchronously), which is
+    // the "subscribe to an external system" case the rule allows; it can't see past the call.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadStatus();
     loadIncidents();
     const poll = setInterval(loadStatus, 3000);
@@ -98,19 +104,19 @@ export function useLive() {
 }
 
 export async function reviewIncident(id: string, status: Incident["status"]): Promise<Incident> {
-  const res = await fetch(`/api/incidents/${id}/review`, {
+  const res = await apiFetch(`/api/incidents/${id}/review`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),
   });
   const body = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(body?.error ?? `Couldn't save the review (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(`Couldn't save the review: ${errorMessage(body, res.status)}`);
   return body.incident as Incident;
 }
 
 export async function retryUpload(id: string): Promise<Incident> {
-  const res = await fetch(`/api/incidents/${id}/upload`, { method: "POST" });
+  const res = await apiFetch(`/api/incidents/${id}/upload`, { method: "POST" });
   const body = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(body?.error ?? `Retry failed (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(`Retry failed: ${errorMessage(body, res.status)}`);
   return body.incident as Incident;
 }

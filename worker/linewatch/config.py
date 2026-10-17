@@ -83,6 +83,10 @@ class Config:
     # Outputs
     stream_port: int = field(default_factory=lambda: _int("STREAM_PORT", 8090))
     out_dir: Path = field(default_factory=lambda: Path(os.environ.get("OUT_DIR", "out")))
+    # On SIGTERM, how long to keep delivering queued incidents before exiting (the rest stay on disk).
+    drain_seconds: float = field(default_factory=lambda: _float("DRAIN_SECONDS", 10.0))
+    # "text" for people at a terminal, "json" for log collectors.
+    log_format: str = field(default_factory=lambda: os.environ.get("LOG_FORMAT", "text").lower())
 
     def validate(self) -> list[str]:
         problems = []
@@ -94,4 +98,6 @@ class Config:
             problems.append("MIN_VIOLATING_FRAMES cannot be larger than WINDOW_FRAMES.")
         if not 0 < self.vest_min_coverage <= 1:
             problems.append("VEST_MIN_COVERAGE must be between 0 and 1.")
+        if self.web_url and len(self.worker_token) < 16:
+            problems.append("WORKER_TOKEN must be set (16+ characters, the same value as the web app's).")
         return problems

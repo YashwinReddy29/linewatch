@@ -1,5 +1,5 @@
 export type IncidentStatus = "open" | "confirmed" | "false_alarm";
-export type RoboflowStatus = "uploading" | "uploaded" | "failed" | "skipped" | null;
+export type RoboflowStatus = "queued" | "uploading" | "uploaded" | "failed" | "skipped" | null;
 
 export interface Incident {
   id: string;
@@ -21,6 +21,8 @@ export interface Incident {
   roboflowStatus: RoboflowStatus;
   roboflowImageId: string | null;
   roboflowError: string | null;
+  roboflowAttempts: number;
+  roboflowNextAttemptAt: string | null;
 }
 
 export interface Zone {
@@ -32,7 +34,7 @@ export interface Zone {
 }
 
 export interface WorkerHealth {
-  state: "starting" | "connecting" | "loading_model" | "running" | "error" | "offline";
+  state: "starting" | "connecting" | "loading_model" | "running" | "stopping" | "error" | "offline";
   message: string;
   fps?: number;
   infer_ms?: number;
@@ -54,8 +56,8 @@ export interface StatusResponse {
   counts: Counts;
   roboflowConfigured: boolean;
   roboflowProjectUrl: string | null;
-  streamUrl: string;
   siteName: string;
+  authEnabled: boolean;
 }
 
 export type BusEvent =

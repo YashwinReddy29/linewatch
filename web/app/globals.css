@@ -1017,3 +1017,50 @@ code {
     transition: none !important;
   }
 }
+
+/* ---------- login ---------- */
+
+.login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+}
+
+.login-card {
+  width: min(360px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 28px 24px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-control);
+}
+
+.login-card h1 {
+  margin: 0;
+  font: 700 28px/1 var(--font-display), sans-serif;
+}
+
+.login-lead {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.login-error {
+  margin: 0;
+  color: var(--alert);
+}
+
+.signout {
+  font: inherit;
+  color: var(--ink-2);
+  background: none;
+  border: 0;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.signout:hover {
+  color: var(--ink);
+}

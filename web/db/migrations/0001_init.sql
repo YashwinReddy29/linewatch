@@ -1,4 +1,4 @@
--- Applied automatically on first request (idempotent).
+-- Initial schema. IF NOT EXISTS so databases created before migrations existed adopt it as-is.
 
 CREATE TABLE IF NOT EXISTS zones (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -18,12 +18,21 @@ export function summarize(status: StatusResponse | null, statusError: string | n
       return { tone: "down", text: "Camera worker needs attention" };
     case "loading_model":
       return { tone: "idle", text: "Loading models" };
+    case "stopping":
+      return { tone: "idle", text: "Camera worker stopping" };
     case "starting":
     case "connecting":
       return { tone: "idle", text: "Starting camera worker" };
     case "running":
       return zone ? { tone: "ok", text: `Watching ${zone.name}` } : { tone: "warn", text: "No zone drawn" };
   }
+}
+
+async function signOut() {
+  await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+  // A full page load on purpose: it drops every piece of client state from the old session.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.href = "/login";
 }
 
 export function Header({ status, statusError }: { status: StatusResponse | null; statusError: string | null }) {
@@ -52,6 +61,11 @@ export function Header({ status, statusError }: { status: StatusResponse | null;
         <span className="dot" aria-hidden="true" />
         {text}
       </span>
+      {status?.authEnabled && (
+        <button className="signout" type="button" onClick={signOut}>
+          Sign out
+        </button>
+      )}
     </header>
   );
 }

@@ -4,3 +4,4 @@ supervision==0.29.1
 numpy>=2.0,<2.4
 requests>=2.31
 python-dotenv>=1.0
+prometheus-client==0.26.0
