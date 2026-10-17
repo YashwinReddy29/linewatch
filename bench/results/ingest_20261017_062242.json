@@ -1,0 +1,34 @@
+{
+  "benchmark": "ingest_load",
+  "machine": {
+    "cpu": "Intel(R) Core(TM) Ultra 7 155U",
+    "cores": 4,
+    "python": "3.12.3",
+    "os": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39"
+  },
+  "settings": {
+    "web": "http://localhost:3200",
+    "incidents": 500,
+    "concurrency": 8,
+    "duplicates": 1,
+    "warmup": 20,
+    "payload_jpeg_bytes": 619490
+  },
+  "requests": 500,
+  "status_counts": {
+    "201": 500
+  },
+  "wall_seconds": 10.99,
+  "requests_per_second": 45.5,
+  "latency_ms": {
+    "mean": 174.9,
+    "p50": 168.7,
+    "p95": 260.1,
+    "p99": 404.0,
+    "max": 448.5
+  },
+  "incidents_sent": 500,
+  "incidents_stored": 500,
+  "rows_per_incident_max": 1,
+  "duplicate_deliveries_absorbed": 0
+}
