@@ -10,11 +10,13 @@ export const runtime = "nodejs";
 const STATUSES = ["open", "confirmed", "false_alarm", "all"] as const;
 
 export async function GET(req: Request) {
-  const status = new URL(req.url).searchParams.get("status") ?? "all";
+  const params = new URL(req.url).searchParams;
+  const status = params.get("status") ?? "all";
+  const limit = Math.min(Math.max(Number(params.get("limit") ?? 100) || 100, 1), 10000);
   if (!STATUSES.includes(status as (typeof STATUSES)[number])) {
     return problem(`status must be one of ${STATUSES.join(", ")}`, 400);
   }
-  return json({ incidents: await listIncidents(status as IncidentStatus | "all") });
+  return json({ incidents: await listIncidents(status as IncidentStatus | "all", limit) });
 }
 
 function num(v: unknown): v is number {

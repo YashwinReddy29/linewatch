@@ -7,7 +7,7 @@ from its mistakes.
 Built on [Roboflow Inference](https://github.com/roboflow/inference) running locally in Docker,
 Roboflow Universe models, and [supervision](https://github.com/roboflow/supervision).
 
-![Linewatch demo](docs/demo.gif)
+<!-- ![Linewatch demo](docs/demo.gif) -->
 
 ## The problem
 

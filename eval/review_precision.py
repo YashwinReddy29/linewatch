@@ -26,7 +26,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--web", default=f"http://localhost:{os.environ.get('WEB_PORT', '3000')}")
     args = parser.parse_args()
-    incidents = requests.get(f"{args.web}/api/incidents?status=all", timeout=5).json()["incidents"]
+    incidents = requests.get(f"{args.web}/api/incidents?status=all&limit=10000", timeout=5).json()["incidents"]
     counts = Counter(i["status"] for i in incidents)
     reviewed = counts["confirmed"] + counts["false_alarm"]
     print(f"Incidents: {len(incidents)} total, {reviewed} reviewed, {counts['open']} still open")

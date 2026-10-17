@@ -16,11 +16,3 @@ eval/testset/
 # env backups
 .env.*
 !.env.example
-
-# env backups
-.env.*
-!.env.example
-
-# env backups
-.env.*
-!.env.example
