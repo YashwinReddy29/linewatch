@@ -343,5 +343,6 @@ hand count per clip; detection precision, recall and mAP@50 need a labeled test 
 - Footage: see [`samples/LICENSES.md`](samples/LICENSES.md)
 - Typeface: Barlow by Jeremy Tribby (SIL Open Font License), via Fontsource
 
-While building this I hit a fresh-install crash in `inference-cli` and opened a fix upstream:
+While building this I hit a fresh-install crash in `inference-cli` and contributed a fix upstream,
+merged into Roboflow Inference and shipping in 1.8.1:
 [roboflow/inference#3217](https://github.com/roboflow/inference/pull/3217).
